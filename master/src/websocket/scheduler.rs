@@ -67,7 +67,7 @@ impl Actor for Scheduler {
                                     .send(messages::NewChallenge(proof.challenge.clone()))
                                     .await
                                     .expect("更新挑战失败");
-                                let stop_cutoff_time = cutoff_time.clone().saturating_add(2);
+                                let stop_cutoff_time = cutoff_time.clone().saturating_add(5);
 
                                 debug!("stop_cutoff_time: {stop_cutoff_time:?}");
 

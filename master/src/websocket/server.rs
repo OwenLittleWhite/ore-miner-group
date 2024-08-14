@@ -154,6 +154,7 @@ impl Handler<messages::AssignTask> for ServerActor {
 
     fn handle(&mut self, msg: messages::AssignTask, _: &mut Self::Context) -> Self::Result {
         let mut start_nonce = 0_u64;
+        let max_nonce: u64 = u64::MAX;
         let mut success_id = vec![];
         self.sessions.iter().for_each(|(id, session)| {
             match session.miner.status {
@@ -161,7 +162,9 @@ impl Handler<messages::AssignTask> for ServerActor {
                     //warn!("客户端: {id:?} 工作中")
                 }
                 MinerStatus::Idle => {
-                    let workload = 1_000_000; //((session.miner.hashrate as f32 * 1.2) as u64;
+                    let workers: usize = self.sessions.len();
+                    let workload: u64 = max_nonce / workers as u64;
+                    // let workload = 1_000_000; //((session.miner.hashrate as f32 * 1.2) as u64;
                     match stream::create_client_message(0, stream::server::Task {
                         challenge: msg.challenge,
                         nonce_range: { start_nonce..start_nonce + workload },
