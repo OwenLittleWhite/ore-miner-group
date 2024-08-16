@@ -7,10 +7,11 @@ use std::{
 };
 
 use drillx::{equix, Hash};
+use tracing::{debug, field::debug};
 
-use common::stream::{client, server};
+use lib_shared::stream::{client, server};
 
-pub fn find_hash(cores: usize, task: server::Task) -> client::MineResult {
+pub fn find_hash(cores: usize, task: server::Task) -> client::RemoteMineResult {
     let core_ids = core_affinity::get_core_ids().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
     let handles: Vec<_> = core_ids
@@ -18,7 +19,7 @@ pub fn find_hash(cores: usize, task: server::Task) -> client::MineResult {
         .map(|i| {
             std::thread::spawn({
                 let mut memory = equix::SolverMemory::new();
-                let total_nonce = task.nonce_range.start + task.nonce_range.end;
+                let total_nonce = task.nonce_range.end - task.nonce_range.start;
                 let step = total_nonce.saturating_div(cores as u64);
                 let t = task.clone();
                 let c = counter.clone();
@@ -31,6 +32,8 @@ pub fn find_hash(cores: usize, task: server::Task) -> client::MineResult {
                     let _ = core_affinity::set_for_current(i);
                     let timer = Instant::now();
                     let mut nonce = step.saturating_mul(i.id as u64) + t.nonce_range.start;
+                    debug!("core: {} start nonce: {}", i.id, nonce);
+
                     let mut best_nonce = nonce;
                     let mut best_difficulty = 0;
                     let mut best_hash = Hash::default();
@@ -87,7 +90,7 @@ pub fn find_hash(cores: usize, task: server::Task) -> client::MineResult {
         }
     }
 
-    client::MineResult {
+    client::RemoteMineResult {
         challenge: task.challenge,
         nonce_range: task.nonce_range,
         workload: counter.load(Ordering::SeqCst) as u64,

@@ -19,14 +19,16 @@ cargo build --release
 ```cmd
 C:\USERS\USER_NAME\DESKTOP\ORE-MINER-GROUP
 │  config.json
+│  benchmark.exe
 │  mine-client.exe
 │  mine-server.exe
 ```
 
 ### 服务端配置文件
 - `config.json`
-  - `fee_payer`： gas支付钱包，省略使用矿工钱包
-  - `dynamic_fee_url`：支持Helius、Alchemy、Quiknode、Triton
+- `fee_payer`： gas支付钱包，省略使用矿工钱包
+- `dynamic_fee_url`：支持Helius、Alchemy、Quiknode、Triton
+- `port`： 服务端口
 
 ```json
 {
@@ -34,7 +36,8 @@ C:\USERS\USER_NAME\DESKTOP\ORE-MINER-GROUP
   "keypair_path": "I:/id.json",
   "fee_payer": "I:/id.json",
   "buffer_time": 5,
-  "dynamic_fee_url": "https://rpc.com/"
+  "dynamic_fee_url": "https://rpc.com/",
+  "port": 8080
 }
 
 ```
@@ -42,25 +45,21 @@ C:\USERS\USER_NAME\DESKTOP\ORE-MINER-GROUP
 ### 服务端启动
 ```cmd
 
-# --priority-fee：固定优先费
-# --dynamic-fee： 是否动态优先费
+# --priority-fee： 固定优先费
+# --dynamic-fee：  是否动态优先费
+# --jito：         是否使用jito
 
-# 固定优先费
-
-.\mine-server.exe --priority-fee 50000
-
-# 动态优先费，动态异常使用固定值
-
-.\mine-server.exe --priority-fee 50000 --dynamic-fee
+.\mine-server.exe --priority-fee 50000 --dynamic-fee --jito
 ```
 
 
 ### 客户端启动
 ```cmd
-# --url:    服务器地址
-# --cores:  核心数（不提供使用全部核心）
-# --wallet: 预留（随便填）
+# --url:        服务器地址
+# --reconnect:  重连次数（默认10次，每次间隔10秒）
+# --cores:      核心数（不提供使用全部核心）
+# --wallet:     预留（随便填）
 
-.\mine-client.exe --url "ws://127.0.0.1:8080" --cores 16 --wallet "" 
+.\mine-client.exe --url "ws://127.0.0.1:8080" --reconnect 10 --cores 16 --wallet "any" 
 
 ```

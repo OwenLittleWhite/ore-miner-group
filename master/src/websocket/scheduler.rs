@@ -5,6 +5,8 @@ use std::{
 };
 
 use actix::{Actor, Addr, AsyncContext, Context, Handler, MessageResult, WrapFuture};
+use colored::Colorize;
+use drillx::Solution;
 use log::{debug, warn};
 use ore_api::state::Proof;
 use tokio::time::{sleep, Instant};
@@ -12,21 +14,33 @@ use tracing::info;
 
 use crate::{
     ore,
-    websocket::{mediator::MediatorActor, messages, MinerStatus},
+    websocket::{
+        jito::JitoActor,
+        mediator::MediatorActor,
+        messages,
+        messages::MineResult,
+        MinerStatus,
+    },
 };
 
 /// 矿工任务调度器
 pub struct Scheduler {
     addr: Addr<MediatorActor>,
+    jito: Addr<JitoActor>,
     best_result: messages::MineResult,
     best_miner: usize,
     miner: Arc<ore::Miner>,
 }
 
 impl Scheduler {
-    pub fn new(mediator: Addr<MediatorActor>, miner: Arc<ore::Miner>) -> Self {
+    pub fn new(
+        mediator: Addr<MediatorActor>,
+        jito: Addr<JitoActor>,
+        miner: Arc<ore::Miner>,
+    ) -> Self {
         Self {
             addr: mediator,
+            jito,
             best_result: Default::default(),
             best_miner: 0,
             miner,
@@ -40,12 +54,16 @@ impl Actor for Scheduler {
     fn started(&mut self, ctx: &mut Self::Context) {
         let this = ctx.address();
         let addr = self.addr.clone();
+        let jito = self.jito.clone();
         let miner = self.miner.clone();
 
         self.addr.do_send(messages::SetTaskActor(this.clone()));
 
         ctx.spawn(
             async move {
+                // 检查钱包是否已经注册矿工
+                miner.open(jito.clone()).await;
+
                 loop {
                     addr.send(messages::ResetMiners).await.expect("重置矿工出错");
 
@@ -67,13 +85,29 @@ impl Actor for Scheduler {
                                     .send(messages::NewChallenge(proof.challenge.clone()))
                                     .await
                                     .expect("更新挑战失败");
-                                let stop_cutoff_time = cutoff_time.clone().saturating_add(5);
+
+                                info!(
+                                    "{}",
+                                    "======================== 新纪元 ========================"
+                                        .bold()
+                                        .red()
+                                );
+
+                                let stop_cutoff_time = if cutoff_time == 0 {
+                                    warn!("非活跃状态，派发单任务");
+                                    cutoff_time
+                                } else {
+                                    cutoff_time + 5 // 加上5秒的缓冲时间，防止有矿工未提交结果
+                                };
 
                                 debug!("stop_cutoff_time: {stop_cutoff_time:?}");
+
+                                let start_assign = Instant::now();
 
                                 // 派发任务到所有矿工，返回派发的矿工数
                                 let cunt = clone_addr
                                     .send(messages::AssignTask {
+                                        active: stop_cutoff_time != 0,
                                         challenge: proof.challenge,
                                         cutoff_time,
                                         min_difficulty: min_difficulty.clone(),
@@ -81,22 +115,32 @@ impl Actor for Scheduler {
                                     .await
                                     .expect("派发任务失败");
 
-                                info!("派发矿工数: {cunt:?}");
+                                info!(
+                                    "派发矿工数: {cunt:?}, 用时: {}毫秒, {stop_cutoff_time}秒后提交",
+                                    start_assign.elapsed().as_millis()
+                                );
 
                                 // 等待挖矿结束获取解决方案
                                 loop {
                                     sleep(Duration::from_millis(500)).await;
-
                                     // 截止时间到后获取解决方案
                                     if start_time.elapsed().as_secs().ge(&stop_cutoff_time) {
-                                        let solution = clone_this
+                                        let result = clone_this
                                             .send(messages::GetSolution(min_difficulty))
                                             .await
                                             .expect("获取解决方案失败");
 
-                                        if solution.is_some() {
-                                            return solution;
-                                        }
+                                        if let Some(r) = result {
+                                            info!(
+                                                "最优哈希: {} (难度: {})",
+                                                bs58::encode(r.hash).into_string(),
+                                                r.difficulty
+                                            );
+                                            return Some((
+                                                r.difficulty,
+                                                Solution::new(r.digest, r.nonce.to_le_bytes()),
+                                            ));
+                                        };
                                     }
 
                                     // 可能网络问题导致矿工全部掉线
@@ -117,7 +161,7 @@ impl Actor for Scheduler {
                             }
                         };
 
-                        miner.mine(find_hash).await
+                        miner.mine(jito.clone(), find_hash).await
                     } else {
                         sleep(Duration::from_millis(2000)).await;
                     }
@@ -128,7 +172,7 @@ impl Actor for Scheduler {
     }
 }
 
-// 矿工上传挖矿结果
+// 接收矿工上传挖矿的结果
 impl Handler<messages::UpdateMineResult> for Scheduler {
     type Result = ();
 
@@ -148,15 +192,7 @@ impl Handler<messages::GetSolution> for Scheduler {
 
     fn handle(&mut self, msg: messages::GetSolution, _: &mut Self::Context) -> Self::Result {
         MessageResult(if self.best_result.difficulty.ge(&msg.0) {
-            info!(
-                "最优哈希: {} (难度: {})",
-                bs58::encode(self.best_result.hash.h).into_string(),
-                self.best_result.difficulty
-            );
-            Some(drillx::Solution::new(
-                self.best_result.hash.d,
-                self.best_result.nonce.to_le_bytes(),
-            ))
+            Some(self.best_result.clone())
         } else {
             None
         })

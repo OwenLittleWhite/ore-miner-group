@@ -28,7 +28,7 @@ use actix::{
 use rand::{rngs::ThreadRng, Rng};
 use tracing::{error, info, warn};
 
-use common::stream;
+use lib_shared::stream;
 
 use crate::websocket::{
     mediator::MediatorActor,
@@ -156,7 +156,8 @@ impl Handler<messages::AssignTask> for ServerActor {
         let mut start_nonce = 0_u64;
         let max_nonce: u64 = u64::MAX;
         let mut success_id = vec![];
-        self.sessions.iter().for_each(|(id, session)| {
+
+        for (id, session) in self.sessions.iter() {
             match session.miner.status {
                 MinerStatus::Working => {
                     //warn!("客户端: {id:?} 工作中")
@@ -167,7 +168,7 @@ impl Handler<messages::AssignTask> for ServerActor {
                     // let workload = 1_000_000; //((session.miner.hashrate as f32 * 1.2) as u64;
                     match stream::create_client_message(0, stream::server::Task {
                         challenge: msg.challenge,
-                        nonce_range: { start_nonce..start_nonce + workload },
+                        nonce_range: { start_nonce..start_nonce + workload - 1 },
                         cutoff_time: msg.cutoff_time,
                         min_difficulty: msg.min_difficulty,
                     }) {
@@ -180,6 +181,9 @@ impl Handler<messages::AssignTask> for ServerActor {
                             error!("创建客户端消息异常：{err:?}");
                         }
                     }
+                    if !msg.active {
+                        break;
+                    }
                 }
                 MinerStatus::Complete => {
                     //warn!("客户端: {id:?} 工作完成")
@@ -188,7 +192,7 @@ impl Handler<messages::AssignTask> for ServerActor {
                     warn!("miner id:{id:?} 未知状态")
                 }
             }
-        });
+        }
 
         // 更新派送任务的miner状态
         success_id.iter().for_each(|id| {

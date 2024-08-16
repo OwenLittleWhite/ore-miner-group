@@ -28,17 +28,24 @@ use clap::Parser;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use tokio::time::sleep;
-use tracing::log::*;
-use tracing_subscriber::EnvFilter;
-// use tracing::{info, debug};
+use tracing::{debug, error, info};
 use tracing_subscriber::fmt::{format, time::ChronoLocal};
 
 use crate::{
     config::load_config_file,
     ore::Miner,
-    websocket::{mediator, messages, messages::UpdateMinerAccount, scheduler, server, session},
+    websocket::{
+        jito,
+        mediator,
+        messages,
+        messages::UpdateMinerAccount,
+        scheduler,
+        server,
+        session,
+    },
 };
 
+mod benchmark;
 mod config;
 pub mod ore;
 mod websocket;
@@ -57,6 +64,9 @@ struct Args {
 
     #[arg(long, help = "Enable dynamic priority fees", global = true)]
     dynamic_fee: bool,
+
+    #[arg(long, help = "Add jito tip to the miner. Defaults to false", global = true)]
+    jito: bool,
 }
 
 async fn index() -> impl Responder {
@@ -86,7 +96,7 @@ async fn get_count(count: web::Data<AtomicUsize>) -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    common::log::init_log();
+    lib_shared::log::init_log();
 
     let args = Args::parse();
 
@@ -95,6 +105,8 @@ async fn main() -> std::io::Result<()> {
     debug!("{cfg:?}");
 
     let rpc_client = RpcClient::new_with_commitment(cfg.rpc, CommitmentConfig::confirmed());
+    let jito_client =
+        RpcClient::new("https://mainnet.block-engine.jito.wtf/api/v1/transactions".to_string());
     let default_keypair = cfg.keypair_path;
     let fee_payer_path = cfg.fee_payer.unwrap_or(default_keypair.clone());
 
@@ -105,6 +117,7 @@ async fn main() -> std::io::Result<()> {
         cfg.dynamic_fee_url,
         args.dynamic_fee,
         Some(fee_payer_path),
+        Arc::new(jito_client),
         cfg.buffer_time,
     ));
 
@@ -121,10 +134,14 @@ async fn main() -> std::io::Result<()> {
     }
     .start();
 
-    // start task actor
-    let task = scheduler::Scheduler::new(mediator.clone(), miner).start();
+    let jito = jito::JitoActor {
+        enable: args.jito,
+        tip: 0,
+    }
+    .start();
 
-    info!("starting HTTP server at http://localhost:8080");
+    // start task actor
+    let task = scheduler::Scheduler::new(mediator.clone(), jito, miner).start();
 
     HttpServer::new(move || {
         App::new()
@@ -139,7 +156,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(Logger::default())
     })
     .workers(2)
-    .bind(("127.0.0.1", 8080))?
+    .bind(("0.0.0.0", cfg.port))?
     .run()
     .await
 }
